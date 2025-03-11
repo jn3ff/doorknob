@@ -1,0 +1,23 @@
+[package]
+name = "doorknob"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# feature for hardware support
+hardware = ["dep:gpio", "dep:rppal"]
+
+[dependencies]
+anyhow = "1.0.96"
+axum = { version = "0.8.1", features = ["macros"] }
+tokio = { version = "1.44.0", features = ["full"] }
+serde = { version = "1.0.218", features = ["derive", "serde_derive"] }
+more-asserts = "0.3.1"
+
+# optional dependencies that are only included when the "hardware" feature is enabled
+gpio = { version = "0.4.1", optional = true }
+rppal = { version = "0.22.1", optional = true }
+once_cell = "1.20.3"
+argon2 = { version = "0.5.3", features = ["simple", "std", "zeroize"] }
+
+[target.aarch64-unknown-linux-gnu]
