@@ -10,10 +10,12 @@ pub mod mock {
             Self { gpio_id: id }
         }
 
+        // needs to be &mut for rppal compat
         pub fn set_high(&mut self) {
             //println!("set {} pin to high", self.gpio_id);
         }
 
+        // needs to be &mut for rppal compat
         pub fn set_low(&mut self) {
             //println!("set {} pin to low", self.gpio_id)
         }

@@ -3,22 +3,23 @@ use std::{
     error::Error,
     fmt,
     io::{Write, stdin, stdout},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use tokio::{
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        Mutex,
+        mpsc::{Receiver, Sender},
+    },
     time::sleep,
 };
 
-use crate::{
-    STATE,
-    rpi::{Button, LED, LEDState, MotorDirection, StepMotor},
-};
+use crate::rpi::{LED, LEDState, MotorDirection, StepMotor};
 
+pub static STATE: Lazy<Mutex<LockState>> = Lazy::new(|| Mutex::new(LockState::from_env()));
 static LOCK_IN_USE: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +32,7 @@ pub enum LockState {
 pub enum InstructionSource {
     Button,
     Api,
+    AutoSensor,
 }
 
 #[derive(Debug, Clone)]
@@ -121,49 +123,34 @@ impl From<LockAction> for MotorDirection {
     }
 }
 
-impl From<LockAction> for LEDState {
-    fn from(action: LockAction) -> LEDState {
-        match action {
-            LockAction::Lock => LEDState::Off,
-            LockAction::Unlock => LEDState::On,
-        }
-    }
-}
+const READY_LED_PIN: u8 = 17;
+const IN_USE_LED_PIN: u8 = 22;
 
 pub struct Lock {
-    led: LED,
+    ready_led: LED,
+    in_use_led: LED,
     motor: StepMotor,
 }
 
 impl Lock {
     pub fn new() -> Self {
         Self {
-            led: LED::new(),
+            ready_led: LED::new(READY_LED_PIN).with_state(LEDState::On),
+            in_use_led: LED::new(IN_USE_LED_PIN).with_state(LEDState::Off),
             motor: StepMotor::new(),
         }
     }
 
     pub async fn act(&mut self, action: &LockAction) {
         println!("Currently taking {:?} action", action);
-        self.led.toggle(action.clone().into());
+        self.ready_led.set_state(LEDState::Off);
+        self.in_use_led.set_state(LEDState::On);
         for _ in 0..512 {
             self.motor.take_step(action.clone().into(), 3).await;
         }
+        self.ready_led.set_state(LEDState::On);
+        self.in_use_led.set_state(LEDState::Off);
         println!("done with {:?} action", action);
-    }
-}
-
-pub async fn expose_button_interface(lock_tx: Arc<tokio::sync::mpsc::Sender<LockInstruction>>) {
-    let button = Button::new();
-    loop {
-        if button.check_is_pressed_debounced().await {
-            if let Err(e) =
-                lock_tx.send_instruction(LockInstruction::Reverse(InstructionSource::Button))
-            {
-                println!("{}", e)
-            };
-        }
-        sleep(Duration::from_millis(200)).await;
     }
 }
 
@@ -176,7 +163,7 @@ pub async fn handle_lock_instruction(mut rx: Receiver<LockInstruction>) {
             continue;
         }
 
-        let _use_lock = LOCK_IN_USE.lock();
+        let _lock_guard = LOCK_IN_USE.lock().await;
 
         match rx.recv().await {
             Some(instruction) => {
