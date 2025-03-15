@@ -1,22 +1,65 @@
 use std::{
     env,
+    error::Error,
+    fmt,
     io::{Write, stdin, stdout},
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
-use tokio::{sync::mpsc::Receiver, time::sleep};
+use chrono::Utc;
+use once_cell::sync::Lazy;
+use tokio::{
+    sync::mpsc::{Receiver, Sender},
+    time::sleep,
+};
 
 use crate::{
     STATE,
     rpi::{Button, LED, LEDState, MotorDirection, StepMotor},
 };
 
+static LOCK_IN_USE: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum LockState {
     Unlocked,
     Locked,
 }
+
+#[derive(Debug, Clone)]
+pub enum InstructionSource {
+    Button,
+    Api,
+}
+
+#[derive(Debug, Clone)]
+pub enum LockInstruction {
+    EnsureLocked(InstructionSource),
+    EnsureUnlocked(InstructionSource),
+    Reverse(InstructionSource),
+}
+
+#[derive(Debug, Clone)]
+pub enum LockAction {
+    Lock,
+    Unlock,
+}
+
+#[derive(Debug)]
+pub struct LockInUse;
+
+impl fmt::Display for LockInUse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Lock in use, collision at {:?}",
+            Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
+        )
+    }
+}
+
+impl Error for LockInUse {}
 
 impl LockState {
     pub fn to_action(&self, instruction: LockInstruction) -> Option<LockAction> {
@@ -69,26 +112,6 @@ impl LockState {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum InstructionSource {
-    Button,
-    Api,
-}
-
-#[derive(Debug, Clone)]
-pub enum LockInstruction {
-    EnsureLocked(InstructionSource),
-    EnsureUnlocked(InstructionSource),
-    Reverse(InstructionSource),
-    Filler, // filler is sent just after any instruction to keep the channel full
-}
-
-#[derive(Debug, Clone)]
-pub enum LockAction {
-    Lock,
-    Unlock,
-}
-
 impl From<LockAction> for MotorDirection {
     fn from(action: LockAction) -> MotorDirection {
         match action {
@@ -134,11 +157,11 @@ pub async fn expose_button_interface(lock_tx: Arc<tokio::sync::mpsc::Sender<Lock
     let button = Button::new();
     loop {
         if button.check_is_pressed_debounced().await {
-            if let Err(_) = lock_tx.try_send(LockInstruction::Reverse(InstructionSource::Button)) {
-                println!("Button toggle discarded because the queue is full")
-            } else {
-                let _ = lock_tx.send(LockInstruction::Filler).await;
-            }
+            if let Err(e) =
+                lock_tx.send_instruction(LockInstruction::Reverse(InstructionSource::Button))
+            {
+                println!("{}", e)
+            };
         }
         sleep(Duration::from_millis(200)).await;
     }
@@ -147,18 +170,52 @@ pub async fn expose_button_interface(lock_tx: Arc<tokio::sync::mpsc::Sender<Lock
 pub async fn handle_lock_instruction(mut rx: Receiver<LockInstruction>) {
     let mut lock = Lock::new();
     loop {
-        if let Some(instruction) = rx.recv().await {
-            println!("Received lock instruction {:?}", instruction);
-            let mut state = STATE.lock().await;
-            if let Some(action) = state.to_action(instruction) {
-                lock.act(&action).await;
-                state.set_reverse();
-            } else {
-                println!("No change to lock state needed")
+        // main poll, lets us see if there's a message ready without actually consuming
+        if rx.is_empty() {
+            sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+
+        let _use_lock = LOCK_IN_USE.lock();
+
+        match rx.recv().await {
+            Some(instruction) => {
+                println!("Received lock instruction {:?}", instruction);
+                let mut state = STATE.lock().await;
+                if let Some(action) = state.to_action(instruction) {
+                    lock.act(&action).await;
+                    state.set_reverse();
+                } else {
+                    println!("No change to lock state needed")
+                }
             }
-            while rx.try_recv().is_ok() {
-                //flush filler, noop
+            None => println!(
+                "Receiving None after passing empty check should never happen. Channel is fucked"
+            ),
+        }
+
+        println!("Lock use completed. Dropping mutex guard and channel is open for business again")
+    }
+}
+
+pub trait LockInstructor {
+    fn send_instruction(&self, instruction: LockInstruction) -> Result<(), LockInUse>;
+}
+
+impl LockInstructor for Arc<Sender<LockInstruction>> {
+    fn send_instruction(&self, instruction: LockInstruction) -> Result<(), LockInUse> {
+        match LOCK_IN_USE.try_lock() {
+            Ok(_) => {
+                if let Err(_) = self.try_send(instruction.clone()) {
+                    println!(
+                        "Unexpected error on try_send instruction {:?}, Justin you fucked up the control flow.",
+                        instruction
+                    );
+                    return Err(LockInUse);
+                }
+                Ok(())
             }
+            Err(_) => Err(LockInUse),
         }
     }
 }

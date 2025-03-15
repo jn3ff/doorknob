@@ -10,7 +10,7 @@ use tokio::sync::mpsc::Sender;
 
 use crate::{
     auth::verify_password,
-    lock::{InstructionSource, LockInstruction},
+    lock::{InstructionSource, LockInstruction, LockInstructor},
 };
 
 #[derive(Deserialize)]
@@ -135,12 +135,10 @@ pub async fn door_control(
     }
     match verify_password(form.passcode.as_str()) {
         Ok(true) => {
-            if let Err(_) = lock_tx.try_send(instruction.expect("already checked none")) {
-                println!("Instruction currently being executed, skipping channel send");
+            if let Err(e) = lock_tx.send_instruction(instruction.expect("already checked none")) {
+                println!("{}", e);
                 return Redirect::to("/home?error=in_use");
             }
-
-            let _ = lock_tx.send(LockInstruction::Filler).await;
 
             Redirect::to("/home?success")
         }
