@@ -16,7 +16,7 @@ pub mod server;
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), anyhow::Error> {
     println!("Setting password");
-    setup_password();
+    setup_password().await;
     println!("Validating args");
     Lazy::force(&STATE);
 

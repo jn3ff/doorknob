@@ -193,7 +193,7 @@ impl LockInstructor for Arc<Sender<LockInstruction>> {
     fn send_instruction(&self, instruction: LockInstruction) -> Result<(), LockInUse> {
         match LOCK_IN_USE.try_lock() {
             Ok(_) => {
-                if let Err(_) = self.try_send(instruction.clone()) {
+                if self.try_send(instruction.clone()).is_err() {
                     println!(
                         "Unexpected error on try_send instruction {:?}, Justin you fucked up the control flow.",
                         instruction
@@ -204,5 +204,11 @@ impl LockInstructor for Arc<Sender<LockInstruction>> {
             }
             Err(_) => Err(LockInUse),
         }
+    }
+}
+
+impl Default for Lock {
+    fn default() -> Self {
+        Self::new()
     }
 }

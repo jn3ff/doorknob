@@ -1,8 +1,19 @@
 #[cfg(not(feature = "hardware"))]
-use mock::mock::{MockInputPin, MockOutputPin};
-use more_asserts::assert_ge;
+mod mock;
+
+#[cfg(not(feature = "hardware"))]
+mod gpio {
+    pub use super::mock::{MockGpio as Gpio, MockInputPin as InputPin, MockOutputPin as OutputPin};
+}
+
 #[cfg(feature = "hardware")]
-use rppal::gpio::{Gpio, InputPin, OutputPin};
+mod gpio {
+    pub use rppal::gpio::{Gpio, InputPin, OutputPin};
+}
+
+use gpio::{Gpio, InputPin, OutputPin};
+
+use more_asserts::assert_ge;
 use std::{
     error::Error,
     fmt::Display,
@@ -10,8 +21,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
-
-mod mock;
 
 const LED_PINS: [u8; 2] = [17, 22];
 const MOTOR_PINS: [u8; 4] = [18, 23, 24, 25];
@@ -25,12 +34,10 @@ pub enum LEDState {
     Off,
 }
 
-#[cfg(feature = "hardware")]
 pub struct LED {
     pin: OutputPin,
 }
 
-#[cfg(feature = "hardware")]
 impl LED {
     pub fn new(pin: u8) -> Self {
         assert!(LED_PINS.contains(&pin));
@@ -38,23 +45,7 @@ impl LED {
         let pin = gpio.get(pin).unwrap().into_output();
         Self { pin }
     }
-}
 
-#[cfg(not(feature = "hardware"))]
-pub struct LED {
-    pin: MockOutputPin,
-}
-
-#[cfg(not(feature = "hardware"))]
-impl LED {
-    pub fn new(pin: u8) -> Self {
-        assert!(LED_PINS.contains(&pin));
-        let pin = MockOutputPin::new(pin);
-        Self { pin }
-    }
-}
-
-impl LED {
     pub fn set_state(&mut self, state: LEDState) {
         match state {
             LEDState::On => self.pin.set_high(),
@@ -86,11 +77,10 @@ impl From<MotorDirection> for [u8; 4] {
     }
 }
 
-#[cfg(feature = "hardware")]
 pub struct StepMotor {
     motor_pins: Vec<OutputPin>,
 }
-#[cfg(feature = "hardware")]
+
 impl StepMotor {
     pub fn new() -> Self {
         let gpio = Gpio::new().unwrap();
@@ -101,33 +91,14 @@ impl StepMotor {
                 .collect(),
         }
     }
-}
 
-#[cfg(not(feature = "hardware"))]
-pub struct StepMotor {
-    motor_pins: Vec<MockOutputPin>,
-}
-
-#[cfg(not(feature = "hardware"))]
-impl StepMotor {
-    pub fn new() -> Self {
-        Self {
-            motor_pins: MOTOR_PINS
-                .iter()
-                .map(|&pin| MockOutputPin::new(pin))
-                .collect(),
-        }
-    }
-}
-
-impl StepMotor {
     pub async fn take_step(&mut self, direction: MotorDirection, ms: u64) {
         assert_ge!(ms, 3);
 
         let stepper: [u8; 4] = direction.into();
-        for i in 0..4 {
+        for step in stepper {
             for j in 0..4 {
-                match stepper[i] == 1 << j {
+                match step == 1 << j {
                     true => self.motor_pins[j].set_high(),
                     false => self.motor_pins[j].set_low(),
                 }
@@ -137,12 +108,10 @@ impl StepMotor {
     }
 }
 
-#[cfg(feature = "hardware")]
 pub struct Button {
     pin: InputPin,
 }
 
-#[cfg(feature = "hardware")]
 impl Button {
     pub fn new() -> Self {
         let gpio = Gpio::new().unwrap();
@@ -150,23 +119,6 @@ impl Button {
             pin: gpio.get(BUTTON_PIN).unwrap().into_input_pullup(),
         }
     }
-}
-
-#[cfg(not(feature = "hardware"))]
-pub struct Button {
-    pin: MockInputPin,
-}
-
-#[cfg(not(feature = "hardware"))]
-impl Button {
-    pub fn new() -> Self {
-        Self {
-            pin: MockInputPin::new(BUTTON_PIN),
-        }
-    }
-}
-
-impl Button {
     pub async fn check_is_pressed_debounced(&self) -> bool {
         if self.pin.is_high() {
             return false;
@@ -180,36 +132,9 @@ impl Button {
     }
 }
 
-#[cfg(feature = "hardware")]
 pub struct UltrasonicSensor {
     pub trigger_pin: OutputPin,
     pub echo_pin: InputPin,
-}
-#[cfg(feature = "hardware")]
-impl UltrasonicSensor {
-    pub fn new() -> Self {
-        let gpio = Gpio::new().unwrap();
-        Self {
-            trigger_pin: gpio.get(ULTRASONIC_TRIGGER_PIN).unwrap().into_output(),
-            echo_pin: gpio.get(ULTRASONIC_ECHO_PIN).unwrap().into_input(),
-        }
-    }
-}
-
-#[cfg(not(feature = "hardware"))]
-pub struct UltrasonicSensor {
-    pub trigger_pin: MockOutputPin,
-    pub echo_pin: MockInputPin,
-}
-
-#[cfg(not(feature = "hardware"))]
-impl UltrasonicSensor {
-    pub fn new() -> Self {
-        Self {
-            trigger_pin: MockOutputPin::new(ULTRASONIC_TRIGGER_PIN),
-            echo_pin: MockInputPin::new(ULTRASONIC_ECHO_PIN),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -255,6 +180,13 @@ impl Display for ReadEchoError {
 impl Error for ReadEchoError {}
 
 impl UltrasonicSensor {
+    pub fn new() -> Self {
+        let gpio = Gpio::new().unwrap();
+        Self {
+            trigger_pin: gpio.get(ULTRASONIC_TRIGGER_PIN).unwrap().into_output(),
+            echo_pin: gpio.get(ULTRASONIC_ECHO_PIN).unwrap().into_input(),
+        }
+    }
     fn send_trigger(&mut self, micros: u64) {
         self.trigger_pin.set_high();
         thread::sleep(Duration::from_micros(micros));
@@ -276,12 +208,30 @@ impl UltrasonicSensor {
         while self.echo_pin.is_high() {
             // do nothing, let time pass
         }
-        Ok(Duration::from(start_time.elapsed()))
+        Ok(start_time.elapsed())
     }
 
     pub fn read_distance(&mut self) -> Result<SonicDistance, ReadEchoError> {
         self.send_trigger(10);
         let echo_time = self.read_echo()?;
         Ok(SonicDistance::from(echo_time))
+    }
+}
+
+impl Default for Button {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for StepMotor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for UltrasonicSensor {
+    fn default() -> Self {
+        Self::new()
     }
 }

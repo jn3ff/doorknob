@@ -133,7 +133,7 @@ pub async fn door_control(
     if instruction.is_none() {
         return Redirect::to("/home?error=wtf_was_that");
     }
-    match verify_password(form.passcode.as_str()) {
+    match verify_password(form.passcode.as_str()).await {
         Ok(true) => {
             if let Err(e) = lock_tx.send_instruction(instruction.expect("already checked none")) {
                 println!("Dropping instruction. {}", e);
