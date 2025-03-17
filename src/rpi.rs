@@ -23,7 +23,10 @@ use std::{
 use tokio::time::sleep;
 
 const LED_PINS: [u8; 2] = [17, 22];
-const MOTOR_PINS: [u8; 4] = [18, 23, 24, 25];
+const MOTOR_DIR_PIN: u8 = 23;
+const MOTOR_STEP_PIN: u8 = 24;
+const MOTOR_ENABLE_PIN: u8 = 18;
+const MOTOR_SLEEP_PIN: u8 = 4;
 const BUTTON_PIN: u8 = 21;
 const ULTRASONIC_TRIGGER_PIN: u8 = 16;
 const ULTRASONIC_ECHO_PIN: u8 = 20;
@@ -78,33 +81,55 @@ impl From<MotorDirection> for [u8; 4] {
 }
 
 pub struct StepMotor {
-    motor_pins: Vec<OutputPin>,
+    pub dir_pin: OutputPin,
+    pub step_pin: OutputPin,
+    enable_pin: OutputPin,
+    sleep_pin: OutputPin,
 }
 
 impl StepMotor {
     pub fn new() -> Self {
         let gpio = Gpio::new().unwrap();
-        Self {
-            motor_pins: MOTOR_PINS
-                .iter()
-                .map(|&pin| gpio.get(pin).unwrap().into_output())
-                .collect(),
-        }
+        let mut t = Self {
+            dir_pin: gpio.get(MOTOR_DIR_PIN).unwrap().into_output(),
+            step_pin: gpio.get(MOTOR_STEP_PIN).unwrap().into_output(),
+            enable_pin: gpio.get(MOTOR_ENABLE_PIN).unwrap().into_output(),
+            sleep_pin: gpio.get(MOTOR_SLEEP_PIN).unwrap().into_output(),
+        };
+
+        t.step_pin.set_low();
+        t.deactivate();
+        t
     }
 
-    pub async fn take_step(&mut self, direction: MotorDirection, ms: u64) {
-        assert_ge!(ms, 3);
+    pub fn activate(&mut self) {
+        self.sleep_pin.set_high();
+        std::thread::sleep(Duration::from_millis(3));
+        self.enable_pin.set_low();
+        std::thread::sleep(Duration::from_millis(3));
+    }
 
-        let stepper: [u8; 4] = direction.into();
-        for step in stepper {
-            for j in 0..4 {
-                match step == 1 << j {
-                    true => self.motor_pins[j].set_high(),
-                    false => self.motor_pins[j].set_low(),
-                }
-            }
-            sleep(Duration::from_millis(ms)).await;
+    pub fn deactivate(&mut self) {
+        self.sleep_pin.set_low();
+        std::thread::sleep(Duration::from_millis(3));
+        self.enable_pin.set_high();
+        std::thread::sleep(Duration::from_millis(3));
+    }
+
+    pub fn set_direction(&mut self, direction: MotorDirection) {
+        match direction {
+            MotorDirection::Clockwise => self.dir_pin.set_high(),
+            MotorDirection::CounterClockwise => self.dir_pin.set_low(),
         }
+        std::thread::sleep(Duration::from_millis(5)); // thinking maybe the lock is moving before dir is set
+    }
+
+    pub fn take_step(&mut self, step_delay: Duration) {
+        assert_ge!(step_delay.as_millis(), 3);
+        self.step_pin.set_high();
+        std::thread::sleep(Duration::from_micros(50)); //at least 1.9us
+        self.step_pin.set_low();
+        std::thread::sleep(step_delay);
     }
 }
 

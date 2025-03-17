@@ -18,7 +18,7 @@ async fn main() -> Result<(), anyhow::Error> {
     println!("Setting password");
     setup_password().await;
     println!("Validating args");
-    Lazy::force(&STATE);
+    Lazy::force(&STATE); // if an env variable is not given for lock state, we need the user to set it
 
     let (lock_tx, lock_rx) = channel::<LockInstruction>(1); // buffer is flushed after first message is processed
     let arc_lock_tx = Arc::new(lock_tx);

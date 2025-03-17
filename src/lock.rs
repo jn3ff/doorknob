@@ -1,4 +1,5 @@
 use std::{
+    cmp::min,
     env,
     error::Error,
     fmt,
@@ -8,6 +9,7 @@ use std::{
 };
 
 use chrono::Utc;
+use more_asserts::assert_ge;
 use once_cell::sync::Lazy;
 use tokio::{
     sync::{
@@ -145,13 +147,46 @@ impl Lock {
         println!("Currently taking {:?} action", action);
         self.ready_led.set_state(LEDState::Off);
         self.in_use_led.set_state(LEDState::On);
-        for _ in 0..512 {
-            self.motor.take_step(action.clone().into(), 3).await;
+        self.motor.activate();
+        self.motor.set_direction(action.clone().into());
+
+        let steps: u64 = 60;
+        let target_delay_ms: u64 = 30;
+        let base_delay_ms: u64 = 40;
+        let acceleration_factor: u64 = 1;
+        for step in 0..steps {
+            let delay = get_delay(
+                step,
+                steps,
+                acceleration_factor,
+                target_delay_ms,
+                base_delay_ms,
+            );
+
+            println!("delay {}", delay.as_millis());
+            self.motor.take_step(delay);
         }
+        self.motor.deactivate();
         self.ready_led.set_state(LEDState::On);
         self.in_use_led.set_state(LEDState::Off);
         println!("done with {:?} action", action);
     }
+}
+
+fn get_delay(
+    step: u64,
+    steps: u64,
+    accel_factor: u64,
+    target_delay_ms: u64,
+    base_delay_ms: u64,
+) -> Duration {
+    assert_ge!(base_delay_ms, target_delay_ms);
+    let offset = min((steps - 1) - step, step) * accel_factor;
+    let acceleration_space = base_delay_ms - target_delay_ms;
+    if offset >= acceleration_space {
+        return Duration::from_millis(target_delay_ms);
+    }
+    Duration::from_millis(base_delay_ms - offset)
 }
 
 pub async fn handle_lock_instruction(mut rx: Receiver<LockInstruction>) {

@@ -27,8 +27,8 @@ pub async fn expose_button_interface(lock_tx: Arc<Sender<LockInstruction>>) {
 pub async fn expose_closed_detection_interface(lock_tx: Arc<Sender<LockInstruction>>) {
     let mut ultrasonic_sensor = UltrasonicSensor::new();
     let mut start_timer = Instant::now();
-    let frame_threshold_cm = 6;
-    let autolock_interval_sec = 60;
+    let frame_threshold_cm = 6; //distance from doorframe
+    let autolock_interval_sec = 10; // time to autolock
     let err_tolerance = 3;
     let mut errs = 0;
     loop {
@@ -41,7 +41,7 @@ pub async fn expose_closed_detection_interface(lock_tx: Arc<Sender<LockInstructi
                         )) {
                             println!("Autolock instruction dropped. {e}");
                         }
-                        sleep(Duration::from_millis(5000)).await; // auto lock can take a long break after triggering
+                        sleep(Duration::from_millis(5000)).await; // auto lock mech can take a break after triggering
                         start_timer = Instant::now();
                         errs = 0;
                     }
